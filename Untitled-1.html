@@ -1,0 +1,426 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+    <meta charset="UTF-8">
+    <title>像素熱帶雨林</title>
+    <style>
+        body, html {
+            margin: 0;
+            padding: 0;
+            width: 100%;
+            height: 100%;
+            overflow: hidden;
+            background-color: #051405;
+        }
+        canvas {
+            display: block;
+            width: 100vw;
+            height: 100vh;
+            /* 確保像素銳利，防止模糊 */
+            image-rendering: -moz-crisp-edges;
+            image-rendering: -webkit-optimize-contrast;
+            image-rendering: pixelated;
+            image-rendering: crisp-edges;
+            background-color: #0a140a;
+        }
+    </style>
+</head>
+<body>
+
+<canvas id="forestCanvas"></canvas>
+
+<script>
+    const canvas = document.getElementById('forestCanvas');
+    const ctx = canvas.getContext('2d');
+
+    // 內部解析度，設低一點才有像素感 (例如 480x270)
+    const renderWidth = 480;
+    const renderHeight = 270;
+    canvas.width = renderWidth;
+    canvas.height = renderHeight;
+
+    const colors = {
+        skyTop: '#7a8799',   // 天空頂部（較深）
+        skyBottom: '#a5adba',// 天空底部（較淺，模擬霧氣）
+        soil: '#2b1d12',     // 深褐色土壤
+        farTree: '#051a1a',  // 遠景：極深藍綠
+        midTree: '#0a2e2e',  // 中景：深藍綠
+        nearTree: '#144545', // 近景：較亮的深藍綠
+        nearHighlight: '#1a4f4f', // 降低高光亮度使其更內斂
+        moss: '#1e3d1a',     // 樹幹上的青苔
+        plants: ['#2d5a27', '#4a7c44', '#1e3d1a', '#76a165', '#89a874'],
+        soilDetail: '#1a120b',
+        lightRay: 'rgba(255, 255, 255, 0.03)',
+        rain: 'rgba(200, 210, 230, 0.2)',
+        special: { mushroom: '#e63946', rafflesia: '#9d0208', arum: '#4a148c', leaf: '#55a630' }
+    };
+
+    // 儲存靜態物件，防止動畫時閃爍
+    let sceneObjects = {
+        farTrees: [],
+        midTrees: [],
+        nearTrees: [],
+        farPlants: [],
+        midPlants: [],
+        nearPlants: [],
+        vinesFar: [],
+        vinesNear: [],
+        soilBumps: [],
+        soilDots: [],
+        lightRays: [],
+        farRain: [],
+        nearRain: [],
+        specialPlants: []
+    };
+
+    function initScene() {
+        // 預先生成所有物件的位置與屬性
+        sceneObjects.lightRays = Array.from({length: 5}, () => ({ x: Math.random() * renderWidth }));
+        sceneObjects.farTrees = generateTreeData(12, 18, 32);
+        sceneObjects.midTrees = generateTreeData(8, 25, 38);
+        sceneObjects.nearTrees = generateTreeData(5, 15, 25); // 近景改細
+        
+        sceneObjects.farPlants = generatePlantData(15, renderHeight - 22, 5);
+        sceneObjects.midPlants = generatePlantData(20, renderHeight - 20, 10);
+        sceneObjects.nearPlants = generatePlantData(40, renderHeight - 18, 15);
+
+        sceneObjects.vinesFar = generateVineData(10);
+        sceneObjects.vinesNear = generateVineData(8);
+
+        sceneObjects.soilBumps = Array.from({length: renderWidth/4}, (_, i) => ({ x: i * 4, h: Math.sin(i * 0.05) * 2 }));
+        sceneObjects.soilDots = Array.from({length: 200}, () => ({ x: Math.random() * renderWidth, y: renderHeight - 22 + Math.random() * 22 }));
+
+        // 初始化四個特殊圖案
+        sceneObjects.specialPlants = [
+            { type: 'mushroom', x: 50, y: renderHeight - 22, text: "音樂海底", url: "http://127.0.0.1:5500/%E6%96%87%E5%AD%97%E6%99%83%E5%8B%95/20260303/20260224/%E9%9F%B3%E6%A8%82%E6%B5%B7%E5%BA%95.html" },
+            { type: 'rafflesia', x: 120, y: renderHeight - 22, text: "文字晃動", url: "http://127.0.0.1:5500/%E9%9F%B3%E6%A8%82%E6%B5%B7%E5%BA%95/20260317/%E6%96%87%E5%AD%97%E6%99%83%E5%8B%95.html" },
+            { type: 'titanArum', x: 250, y: renderHeight - 22, text: "電流急急棒", url: "http://127.0.0.1:5500/%E9%9B%BB%E6%B5%81%E6%80%A5%E6%80%A5%E6%A3%92/20260407/%E9%9B%BB%E6%B5%81%E6%80%A5%E6%80%A5%E6%A3%92.html" },
+            { type: 'leaf', x: 370, y: renderHeight - 22, text: "炸彈遊戲", url: "http://127.0.0.1:5500/%E7%82%B8%E5%BD%88%E9%81%8A%E6%88%B2/20260412/%E7%82%B8%E5%BD%88%E9%81%8A%E6%88%B2.html" }
+        ];
+
+        // 初始化雨滴 (x 範圍擴大以利 45 度落下覆蓋)
+        sceneObjects.farRain = Array.from({length: 80}, () => createRaindrop());
+        sceneObjects.nearRain = Array.from({length: 120}, () => createRaindrop());
+    }
+
+    function createRaindrop() {
+        return {
+            x: Math.random() * (renderWidth + 200),
+            y: Math.random() * renderHeight,
+            len: 4 + Math.random() * 8,
+            speed: 1 + Math.random() * 1
+        };
+    }
+
+    function draw() {
+        ctx.clearRect(0, 0, renderWidth, renderHeight);
+
+        const skyGradient = ctx.createLinearGradient(0, 0, 0, renderHeight);
+        skyGradient.addColorStop(0, colors.skyTop);
+        skyGradient.addColorStop(0.8, colors.skyBottom);
+        ctx.fillStyle = skyGradient;
+        ctx.fillRect(0, 0, renderWidth, renderHeight);
+
+        renderLightRays();
+        updateAndRenderRain(sceneObjects.farRain);
+        renderVines(sceneObjects.vinesFar, 0.3);
+        renderTrees(sceneObjects.farTrees, colors.farTree, 0.15, 'rgba(255,255,255,0.02)');
+        renderPlants(sceneObjects.farPlants);
+        renderTrees(sceneObjects.midTrees, colors.midTree, 0.2, 'rgba(255,255,255,0.04)');
+        renderPlants(sceneObjects.midPlants);
+        renderTrees(sceneObjects.nearTrees, colors.nearTree, 0.3, colors.nearHighlight);
+        renderVines(sceneObjects.vinesNear, 0.6);
+
+        ctx.fillStyle = colors.soil;
+        ctx.fillRect(0, renderHeight - 22, renderWidth, 22);
+        
+        ctx.fillStyle = colors.soil;
+        sceneObjects.soilBumps.forEach(b => ctx.fillRect(b.x, renderHeight - 22 - b.h, 4, b.h + 2));
+        
+        ctx.fillStyle = colors.soilDetail;
+        sceneObjects.soilDots.forEach(d => ctx.fillRect(d.x, d.y, 1, 1));
+
+        // 先繪製所有植株，確保特殊圖案不被遮住
+        renderPlants(sceneObjects.nearPlants);
+        renderSpecialPlants(); 
+        updateAndRenderRain(sceneObjects.nearRain); // 最後是雨滴
+
+        requestAnimationFrame(draw);
+    }
+
+    function renderLightRays() {
+        ctx.fillStyle = colors.lightRay;
+        sceneObjects.lightRays.forEach(r => {
+            ctx.beginPath();
+            ctx.moveTo(r.x, 0);
+            ctx.lineTo(r.x + 40, renderHeight);
+            ctx.lineTo(r.x + 80, renderHeight);
+            ctx.lineTo(r.x + 20, 0);
+            ctx.fill();
+        });
+    }
+
+    function renderSpecialPlants() {
+        sceneObjects.specialPlants.forEach(p => {
+            ctx.save();
+            if (p.type === 'mushroom') {
+                // 精細蘑菇
+                ctx.fillStyle = '#d8e2dc'; // 莖
+                ctx.fillRect(p.x + 6, p.y - 10, 6, 10);
+                ctx.fillStyle = '#8d99ae'; // 莖部陰影
+                ctx.fillRect(p.x + 10, p.y - 10, 2, 10);
+                
+                ctx.fillStyle = colors.special.mushroom; // 傘蓋底色
+                ctx.fillRect(p.x, p.y - 20, 18, 10);
+                ctx.fillStyle = '#a8202a'; // 傘蓋陰影
+                ctx.fillRect(p.x, p.y - 14, 18, 4);
+                ctx.fillStyle = '#ffffff'; // 斑點
+                ctx.fillRect(p.x + 3, p.y - 18, 3, 3);
+                ctx.fillRect(p.x + 12, p.y - 17, 2, 2);
+                ctx.fillRect(p.x + 8, p.y - 19, 2, 2);
+            } else if (p.type === 'rafflesia') {
+                // 精細大王花
+                ctx.fillStyle = '#5a0104'; // 最深色核心
+                ctx.fillRect(p.x + 8, p.y - 8, 14, 8);
+                ctx.fillStyle = colors.special.rafflesia; // 花瓣主色
+                // 繪製五片交錯的花瓣感
+                ctx.fillRect(p.x, p.y - 6, 30, 6);
+                ctx.fillRect(p.x + 4, p.y - 10, 22, 4);
+                ctx.fillStyle = '#ffba08'; // 斑點細節
+                for(let i=0; i<6; i++) {
+                    ctx.fillRect(p.x + 2 + i*5, p.y - 4 - (i%2), 2, 2);
+                }
+                ctx.fillStyle = '#6a040f'; // 花心開口
+                ctx.fillRect(p.x + 11, p.y - 8, 8, 3);
+            } else if (p.type === 'titanArum') {
+                // 精細巨魔芋
+                ctx.fillStyle = '#1b4332'; // 基部
+                ctx.fillRect(p.x + 4, p.y - 10, 16, 10);
+                ctx.fillStyle = colors.special.arum; // 佛焰苞主色
+                ctx.beginPath();
+                ctx.moveTo(p.x, p.y - 10);
+                ctx.lineTo(p.x - 5, p.y - 35);
+                ctx.lineTo(p.x + 12, p.y - 45);
+                ctx.lineTo(p.x + 29, p.y - 35);
+                ctx.lineTo(p.x + 24, p.y - 10);
+                ctx.fill();
+                ctx.fillStyle = '#6a1b9a'; // 佛焰苞高光
+                ctx.fillRect(p.x + 5, p.y - 35, 14, 15);
+                ctx.fillStyle = '#ffca3a'; // 肉穗花序 (金黃色更精緻)
+                ctx.fillRect(p.x + 10, p.y - 55, 4, 35);
+                ctx.fillStyle = '#e9b327'; // 肉穗陰影
+                ctx.fillRect(p.x + 12, p.y - 55, 2, 35);
+            } else if (p.type === 'leaf') {
+                // 精細落葉
+                ctx.fillStyle = '#386641'; // 葉子深色底
+                ctx.beginPath();
+                ctx.moveTo(p.x, p.y);
+                ctx.lineTo(p.x + 10, p.y - 15);
+                ctx.lineTo(p.x + 30, p.y - 10);
+                ctx.lineTo(p.x + 35, p.y);
+                ctx.fill();
+                ctx.fillStyle = colors.special.leaf; // 葉面亮色
+                ctx.fillRect(p.x + 10, p.y - 10, 18, 6);
+                // 葉脈
+                ctx.fillStyle = '#1b4332';
+                ctx.fillRect(p.x + 5, p.y - 3, 25, 1);
+                ctx.fillRect(p.x + 15, p.y - 8, 1, 6);
+            }
+
+            // 繪製下方的像素風格文字框
+            let centerX = p.x;
+            if (p.type === 'mushroom') centerX = p.x + 9;
+            else if (p.type === 'rafflesia') centerX = p.x + 15;
+            else if (p.type === 'titanArum') centerX = p.x + 12;
+            else if (p.type === 'leaf') centerX = p.x + 17;
+
+            ctx.font = '10px monospace';
+            const textW = ctx.measureText(p.text).width;
+            
+            // 文字框背景
+            ctx.fillStyle = 'rgba(0, 0, 0, 0.6)';
+            ctx.fillRect(centerX - textW/2 - 3, p.y + 2, textW + 6, 12);
+            
+            // 文字內容
+            ctx.fillStyle = '#ffffff';
+            ctx.textAlign = 'center';
+            ctx.textBaseline = 'top';
+            ctx.fillText(p.text, centerX, p.y + 3);
+
+            ctx.restore();
+        });
+    }
+
+    function generateTreeData(count, minW, maxW) {
+        return Array.from({length: count}, () => ({
+            x: Math.random() * renderWidth,
+            width: Math.random() * (maxW - minW) + minW,
+            barks: Array.from({length: 10}, () => ({
+                relX: Math.random(),
+                y: Math.random() * renderHeight,
+                h: 5 + Math.random() * 30
+            }))
+        }));
+    }
+
+    function renderTrees(trees, color, textureOpacity, highlight) {
+        trees.forEach(tree => {
+            ctx.fillStyle = color;
+            ctx.fillRect(tree.x - tree.width / 2, 0, tree.width, renderHeight - 20);
+            ctx.fillStyle = highlight;
+            ctx.fillRect(tree.x - tree.width / 2, 0, tree.width / 6, renderHeight - 20);
+            ctx.fillStyle = `rgba(0, 0, 0, ${textureOpacity})`;
+            tree.barks.forEach(b => {
+                ctx.fillRect(tree.x - tree.width / 2 + (b.relX * tree.width), b.y, 1, b.h);
+            });
+        });
+    }
+
+    function updateAndRenderRain(rainArray) {
+        ctx.strokeStyle = colors.rain;
+        ctx.lineWidth = 1;
+        rainArray.forEach(p => {
+            // 更新位置：右上到左下 (45度)
+            p.x -= p.speed;
+            p.y += p.speed;
+
+            // 跑出畫面後的重新生成邏輯 (右上角臨界點)
+            if (p.y > renderHeight || p.x < -p.len) {
+                // 隨機出現在頂部或右側
+                if (Math.random() > 0.5) {
+                    p.y = -p.len;
+                    p.x = Math.random() * (renderWidth + 100);
+                } else {
+                    p.x = renderWidth + p.len;
+                    p.y = Math.random() * renderHeight - 100;
+                }
+            }
+            
+            ctx.beginPath();
+            ctx.moveTo(p.x, p.y);
+            ctx.lineTo(p.x - p.len, p.y + p.len);
+            ctx.stroke();
+
+            if (p.y > renderHeight - 25 && Math.random() > 0.9) {
+                ctx.fillStyle = colors.rain;
+                ctx.fillRect(p.x - p.len, p.y + p.len, 1, 1);
+            }
+        });
+    }
+
+    function generateVineData(count) {
+        return Array.from({length: count}, () => ({
+            x: Math.random() * renderWidth,
+            len: 30 + Math.random() * 120,
+            leaves: Array.from({length: 10}, (_, i) => 10 + i * 12)
+        }));
+    }
+
+    function renderVines(vines, alpha) {
+        ctx.globalAlpha = alpha;
+        vines.forEach(v => {
+            ctx.fillStyle = colors.farTree;
+            ctx.fillRect(v.x, 0, 1, v.len);
+            v.leaves.forEach(ly => ctx.fillRect(v.x - 1, ly, 3, 1));
+        });
+        ctx.globalAlpha = 1.0;
+    }
+
+    function generatePlantData(count, baseY, maxH) {
+        return Array.from({length: count}, () => {
+            const h = 8 + Math.random() * maxH;
+            return {
+                x: Math.random() * (renderWidth + 40) - 20,
+                y: baseY - (Math.random() * 5),
+                h: h,
+                color: colors.plants[Math.floor(Math.random() * colors.plants.length)],
+                tilt: (Math.random() - 0.5) * 2,
+                leaves: Array.from({length: Math.floor(h/3)}, (_, i) => ({
+                    yOff: i * 3,
+                    size: 2 + ( (i*3)/h ) * 8,
+                    leafW: 2 + Math.random() * 2
+                }))
+            };
+        });
+    }
+
+    function renderPlants(plants) {
+        plants.forEach(p => {
+            ctx.fillStyle = 'rgba(0,0,0,0.3)';
+            ctx.fillRect(p.x, p.y - p.h, 1, p.h);
+            ctx.fillStyle = p.color;
+            p.leaves.forEach(l => {
+                ctx.globalAlpha = 0.8;
+                ctx.fillRect(p.x - l.size + (l.yOff * p.tilt * 0.1), p.y - p.h + l.yOff, l.size, l.leafW);
+                ctx.fillRect(p.x + 1 + (l.yOff * p.tilt * 0.1), p.y - p.h + l.yOff + 1, l.size, l.leafW);
+                ctx.globalAlpha = 1.0;
+            });
+        });
+    }
+
+    // 確保 DOM 載入後再繪製
+    window.onload = () => {
+        ctx.imageSmoothingEnabled = false; // 禁用平滑處理以保持像素感
+        initScene();
+        draw();
+    };
+
+    // 統一的碰撞偵測邏輯
+    function checkMouseHit(e) {
+        const rect = canvas.getBoundingClientRect();
+        const scaleX = renderWidth / rect.width;
+        const scaleY = renderHeight / rect.height;
+        const mouseX = (e.clientX - rect.left) * scaleX;
+        const mouseY = (e.clientY - rect.top) * scaleY;
+
+        for (const p of sceneObjects.specialPlants) {
+            let xMin, xMax, yMin, yMax;
+
+            if (p.type === 'mushroom') {
+                xMin = p.x; xMax = p.x + 18;
+                yMin = p.y - 20; yMax = p.y + 14;
+            } else if (p.type === 'rafflesia') {
+                xMin = p.x; xMax = p.x + 30;
+                yMin = p.y - 10; yMax = p.y + 14;
+            } else if (p.type === 'titanArum') {
+                xMin = p.x; xMax = p.x + 29;
+                yMin = p.y - 55; yMax = p.y + 14;
+            } else if (p.type === 'leaf') {
+                xMin = p.x; xMax = p.x + 35;
+                yMin = p.y - 15; yMax = p.y + 14;
+            }
+
+            if (mouseX >= xMin && mouseX <= xMax && mouseY >= yMin && mouseY <= yMax) {
+                return p;
+            }
+        }
+        return null;
+    }
+
+    // 點擊事件處理
+    canvas.addEventListener('click', (e) => {
+        const hit = checkMouseHit(e);
+        if (hit) {
+            window.open(hit.url, '_blank');
+        }
+    });
+
+    // 增加滑鼠懸停效果，提示可點擊
+    canvas.addEventListener('mousemove', (e) => {
+        const hit = checkMouseHit(e);
+        if (hit) {
+            canvas.style.cursor = 'pointer';
+        } else {
+            canvas.style.cursor = 'default';
+        }
+    });
+
+    // 視窗調整時保持比例
+    window.addEventListener('resize', () => {
+        // 重新繪製以填滿新視窗（雖然解析度固定）
+        draw();
+    });
+</script>
+
+</body>
+</html>
